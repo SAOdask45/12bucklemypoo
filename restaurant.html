@@ -40,7 +40,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--body);font-
 .banner p{margin:0;min-width:0;flex:1 1 280px;color:var(--muted)}
 .banner p b{color:var(--fg)}
 .banner .warn{color:var(--tomato)}
-canvas{display:block;width:100%;max-width:100%;height:auto;aspect-ratio:900/560;border-radius:12px;background:#2a1d14;cursor:pointer;touch-action:manipulation}
+canvas{display:block;width:100%;max-width:100%;height:auto;aspect-ratio:900/560;border-radius:12px;background:#2a1d14;cursor:grab;touch-action:pan-y}
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;color:var(--muted);font-size:12.5px}
 .legend span{white-space:nowrap}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;min-width:0;display:flex;flex-direction:column}
@@ -124,6 +124,7 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
         <span>Klik op een <b>gerecht op de uitgifte</b> om het zelf te brengen</span>
         <span>Klik op een tafel met <b>📋</b> om de bestelling op te nemen</span>
         <span>Klik op een <b>vuile tafel</b> om af te ruimen</span>
+        <span>Sleep om te draaien, scroll om te zoomen</span>
         <span>Ring om gerecht: <b style="color:var(--tomato)">heet</b> → <b style="color:var(--frost)">koud</b></span>
       </div>
     </section>
@@ -143,10 +144,11 @@ button:focus-visible{outline:2px solid var(--brass);outline-offset:2px}
 <div id="toast" hidden></div>
 <div class="modal" id="modal" hidden><div class="sheet" id="sheet"></div></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 'use strict';
 const W = 900, H = 560;
-const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const cv = document.getElementById('cv');
 const $ = id => document.getElementById(id);
 const rnd = (a, b) => a + Math.random() * (b - a);
 const ri = (a, b) => Math.floor(rnd(a, b + 1));
@@ -184,7 +186,7 @@ const RV = {
   ok: ['Prima, niks bijzonders.', 'Was oké.', 'Redelijk etentje.'],
 };
 
-let uid = 1, S, D, speed = 1, tab = 'personeel', scale = 1, holding = false;
+let uid = 1, S, D, speed = 1, tab = 'personeel', holding = false;
 
 /* ---------- opslaan ---------- */
 function save() { try { localStorage.setItem('bistrobaas-save', JSON.stringify(S)); } catch (e) {} }
@@ -371,7 +373,7 @@ function rate(p, stars) {
   D.stats.ratings.push(stars);
   S.rep = clamp(S.rep * .93 + stars * .07, 1, 5);
   const r = [...p.reasons];
-  let txt = stars >= 4 && !r.length ? pick(RV.top) : r.length ? pick(RV[pick(r)]) : pick(RV.ok);
+  let txt = stars >= 4 ? pick(RV.top) : r.length ? pick(RV[pick(r)]) : pick(RV.ok);
   txt = txt.replace('{d}', (p.items[0] ? p.items[0].dish.naam : 'eten').toLowerCase());
   D.stats.reviews.push({ stars, txt });
 }
@@ -461,22 +463,25 @@ function updWaiter(w, dt, k) {
 }
 
 /* ---------- jij als manager ---------- */
-cv.addEventListener('pointerdown', e => {
-  if (!isOpen()) return;
-  const r = cv.getBoundingClientRect();
-  const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
-  let hit = null;
-  for (const d of D.pass) if (Math.hypot(d.x - x, d.y - y) < 26) { hit = () => { D.pass.splice(D.pass.indexOf(d), 1); serveDish(d); floater(d.x + 40, d.y, 'Zelf gebracht', '#e3b04b'); }; break; }
-  if (!hit) for (const t of D.tables) {
-    if (Math.hypot(t.x - x, t.y - y) > 52) continue;
-    if (t.party && t.party.state === 'order') hit = () => { takeOrder(t.party, null); floater(t.x, t.y - 40, 'Opgenomen', '#e3b04b'); };
-    else if (t.dirty) hit = () => { t.dirty = false; floater(t.x, t.y - 40, 'Schoon', '#74c66f'); };
-    break;
+function managerAct(ud) {
+  if (!isOpen() || !ud) return;
+  let hit = null, fx = 0, fy = 0;
+  if (ud.kind === 'dish') {
+    const d = ud.dish;
+    if (!D.pass.includes(d)) return;
+    fx = d.x; fy = d.y;
+    hit = () => { D.pass.splice(D.pass.indexOf(d), 1); serveDish(d); floater(d.x + 40, d.y, 'Zelf gebracht', '#e3b04b'); };
+  } else if (ud.kind === 'table') {
+    const t = D.tables[ud.i];
+    if (!t) return;
+    fx = t.x; fy = t.y;
+    if (t.party && t.party.state === 'order') hit = () => { takeOrder(t.party, null); floater(t.x, t.y, 'Opgenomen', '#e3b04b'); };
+    else if (t.dirty) hit = () => { t.dirty = false; floater(t.x, t.y, 'Schoon', '#74c66f'); };
   }
   if (!hit) return;
-  if (D.mgrCd > 0) { floater(x, y - 20, 'Even op adem komen…', '#a3b6ab'); return; }
+  if (D.mgrCd > 0) { floater(fx, fy, 'Even op adem komen…', '#a3b6ab'); return; }
   hit(); D.mgrCd = 2.5;
-});
+}
 
 /* ---------- einde van de dag ---------- */
 function endDay() {
@@ -685,155 +690,399 @@ addEventListener('keydown', e => {
   e.preventDefault(); speed = speed === 0 ? 1 : 0; renderAll(true);
 });
 
-/* ---------- tekenen ---------- */
-function rr(x, y, w, h, r) { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); }
-function emoji(ch, x, y, size, alpha = 1) { ctx.globalAlpha = alpha; ctx.font = `${size}px ${EMOJI}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(ch, x, y); ctx.globalAlpha = 1; }
-function label(txt, x, y, size, color, align = 'center') { ctx.font = `${size}px ${DISPLAY}`; ctx.textAlign = align; ctx.textBaseline = 'middle'; ctx.fillStyle = color; ctx.fillText(txt, x, y); }
-function tempColor(t) { const k = clamp((t - 35) / 55, 0, 1); const a = [124, 195, 232], b = [236, 90, 64]; return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`; }
-function guest(x, y, mood) {
-  ctx.fillStyle = moodColor(mood); ctx.beginPath(); ctx.arc(x, y, 10, 0, 7); ctx.fill();
-  ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.lineWidth = 1.5; ctx.stroke();
-  ctx.fillStyle = '#1a2722'; ctx.beginPath(); ctx.arc(x - 3.5, y - 2, 1.4, 0, 7); ctx.arc(x + 3.5, y - 2, 1.4, 0, 7); ctx.fill();
-  ctx.beginPath(); ctx.strokeStyle = '#1a2722'; ctx.lineWidth = 1.4;
-  if (mood > 65) ctx.arc(x, y + 1, 4, .2 * Math.PI, .8 * Math.PI); else if (mood > 35) { ctx.moveTo(x - 3.5, y + 4); ctx.lineTo(x + 3.5, y + 4); } else ctx.arc(x, y + 7, 4, 1.2 * Math.PI, 1.8 * Math.PI);
-  ctx.stroke();
+/* ---------- 3D-weergave ---------- */
+// 1 eenheid in 3D = 10 pixels van de plattegrond; midden van de vloer is de oorsprong
+const wx = x => (x - 450) / 10, wz = y => (y - 280) / 10;
+const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#121c18');
+const camera = new THREE.PerspectiveCamera(36, W / H, 1, 500);
+let camYaw = 0, camDist = 84;
+function placeCamera() {
+  const pitch = 1.02, c = Math.cos(pitch) * camDist;
+  camera.position.set(Math.sin(camYaw) * c, Math.sin(pitch) * camDist, 1.5 + Math.cos(camYaw) * c);
+  camera.lookAt(0, 0, 1.5);
+}
+scene.add(new THREE.HemisphereLight('#fff3df', '#3a2a1c', .62));
+const sun = new THREE.DirectionalLight('#ffe8c2', .62);
+sun.position.set(-25, 70, 35);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -55, right: 55, top: 45, bottom: -45, near: 10, far: 180 });
+sun.shadow.bias = -.0006;
+scene.add(sun);
+
+const M = (c, o = {}) => new THREE.MeshStandardMaterial(Object.assign({ color: c, roughness: .75 }, o));
+function box(w, h, d, mat, x, y, z, parent = scene) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; parent.add(m); return m;
+}
+function cyl(rt, rb, h, mat, x, y, z, parent, seg = 20) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+  m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; parent.add(m); return m;
+}
+const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+
+/* canvas-texturen voor emoji, tekst en balkjes */
+const texCache = new Map(), mctx = document.createElement('canvas').getContext('2d');
+function canvasTex(key, w, h, paint, mip) {
+  let t = texCache.get(key);
+  if (t) return t;
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  paint(c.getContext('2d'), w, h);
+  t = new THREE.CanvasTexture(c);
+  if (!mip) { t.minFilter = THREE.LinearFilter; t.generateMipmaps = false; }
+  texCache.set(key, t); return t;
+}
+function sprite(parent, depth = false, order = 10) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ transparent: true, depthTest: depth, depthWrite: false }));
+  s.renderOrder = order; parent.add(s); return s;
+}
+function setTex(s, key, w, h, paint, height) {
+  if (s.userData.key === key) return;
+  s.userData.key = key;
+  s.material.map = canvasTex(key, w, h, paint); s.material.needsUpdate = true;
+  s.scale.set(height * w / h, height, 1);
+}
+function emojiTex(s, ch, height) {
+  setTex(s, 'e:' + ch, 128, 128, g => { g.font = `100px ${EMOJI}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(ch, 64, 72); }, height);
+}
+function textTex(s, txt, color, height, px = 44) {
+  const key = `t:${px}:${color}:${txt}`;
+  if (s.userData.key === key) return;
+  mctx.font = `${px}px ${DISPLAY}`;
+  const w = Math.ceil(mctx.measureText(txt).width + px * .8), h = Math.ceil(px * 1.5);
+  setTex(s, key, w, h, g => {
+    g.font = `${px}px ${DISPLAY}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+    g.lineWidth = px * .22; g.strokeStyle = 'rgba(10,16,13,.9)'; g.strokeText(txt, w / 2, h / 2);
+    g.fillStyle = color; g.fillText(txt, w / 2, h / 2);
+  }, height);
+}
+function barTex(s, frac, color, height) {
+  const q = Math.round(clamp(frac, 0, 1) * 20);
+  setTex(s, `bar:${q}:${color}`, 160, 24, (g, w, h) => {
+    g.fillStyle = 'rgba(10,16,13,.8)'; g.beginPath(); g.roundRect(0, 0, w, h, 12); g.fill();
+    g.fillStyle = color; g.beginPath(); g.roundRect(3, 3, (w - 6) * q / 20, h - 6, 9); g.fill();
+  }, height);
+}
+function bubbleTex(s, list, urgent) {
+  const n = list.length, w = 44 + n * 60, h = 104;
+  setTex(s, `b:${list.join(',')}:${urgent}`, w, h, g => {
+    g.fillStyle = '#f1ecdc'; g.beginPath(); g.roundRect(4, 4, w - 8, 76, 26); g.fill();
+    g.beginPath(); g.moveTo(w / 2 - 12, 78); g.lineTo(w / 2, 98); g.lineTo(w / 2 + 12, 78); g.fill();
+    if (urgent) { g.strokeStyle = '#e3b04b'; g.lineWidth = 7; g.beginPath(); g.roundRect(4, 4, w - 8, 76, 26); g.stroke(); }
+    g.font = `48px ${EMOJI}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    list.forEach((e, i) => { const pending = e[0] === '~'; g.globalAlpha = pending ? .3 : 1; g.fillText(pending ? e.slice(1) : e, 52 + i * 60, 46); });
+    g.globalAlpha = 1;
+  }, 3.3);
+}
+const steamTex = canvasTex('steam', 64, 64, (g) => {
+  const gr = g.createRadialGradient(32, 32, 2, 32, 32, 30);
+  gr.addColorStop(0, 'rgba(255,255,255,.9)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+});
+
+/* vaste inrichting */
+const tablesG = [], stovesG = [];
+let openSign;
+function buildStatic() {
+  const kTex = canvasTex('floorK', 256, 512, g => {
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 8; x++) { g.fillStyle = (x + y) % 2 ? '#b4bbae' : '#d3d7cb'; g.fillRect(x * 32, y * 32, 32, 32); }
+  }, true);
+  const wTex = canvasTex('floorW', 512, 512, g => {
+    for (let i = 0; i < 20; i++) {
+      const y = i * 25.6;
+      g.fillStyle = i % 2 ? '#7a5336' : '#704b30'; g.fillRect(0, y, 512, 26);
+      g.fillStyle = 'rgba(0,0,0,.2)'; g.fillRect(0, y, 512, 1.5);
+      for (let x = (i * 86) % 141; x < 512; x += 141) g.fillRect(x, y, 2, 26);
+    }
+  }, true);
+  for (const [tex, w, x] of [[kTex, 28, 140], [wTex, 58, 610]]) {
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(w, 56), new THREE.MeshStandardMaterial({ map: tex, roughness: .85 }));
+    f.rotation.x = -Math.PI / 2; f.position.set(wx(x), 0, 0); f.receiveShadow = true; scene.add(f);
+  }
+  // muren
+  const zBack = wz(34) - .3;
+  box(32, 7, .6, M('#d5dacf'), wx(160), 3.5, zBack);
+  box(58, 7, .6, M('#22332d'), wx(610), 3.5, zBack);
+  box(90.6, .35, .8, M('#e3b04b', { metalness: .5, roughness: .4 }), 0, 7.1, zBack);
+  box(.6, 7, 56, M('#1d2b26'), -45.3, 3.5, 0);
+  box(.6, 7, 46.6, M('#22332d'), 45.3, 3.5, (wz(34) + wz(500)) / 2);
+  box(.6, 1, 6, M('#3b2a1f'), 45.3, 6.5, wz(530));
+  box(.8, 7, .8, M('#3b2a1f'), 45.3, 3.5, wz(500));
+  const ing = sprite(scene); ing.position.set(43.5, 8.6, wz(530));
+  ing.userData.make = () => textTex(ing, 'INGANG', '#e3b04b', 1.4); ing.userData.make();
+  for (const [txt, x] of [['KEUKEN', 140], ['RESTAURANT', 610]]) {
+    const s = sprite(scene, true); s.position.set(wx(x), 5.2, zBack + .5);
+    s.userData.make = () => textTex(s, txt, '#e3b04b', 1.8); s.userData.make();
+  }
+  openSign = sprite(scene, true); openSign.position.set(wx(860), 5.2, zBack + .5);
+  // schilderijtjes, koelkast, planten
+  [['#ec5a40', 450], ['#7cc3e8', 610], ['#74c66f', 770]].forEach(([c, x]) => {
+    box(4.2, 3, .2, M('#e3b04b', { metalness: .4 }), wx(x), 3.2, zBack + .4);
+    box(3.6, 2.4, .2, M(c), wx(x), 3.2, zBack + .5);
+  });
+  box(8, 6.5, 2.6, M('#cfd6d3', { metalness: .35, roughness: .35 }), wx(215), 3.25, wz(48));
+  box(.2, 3, .3, M('#8a918d'), wx(215) + 3, 4, wz(48) + 1.4);
+  for (const x of [345, 880]) {
+    const g = new THREE.Group(); g.position.set(wx(x), 0, wz(62)); scene.add(g);
+    cyl(1, .8, 1.6, M('#b9643b'), 0, .8, 0, g);
+    const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(1.7, 1), M('#3f7d3a', { flatShading: true }));
+    leaf.position.y = 2.9; leaf.castShadow = true; g.add(leaf);
+  }
+  // uitgifte
+  box(4, 3.2, 52.6, M('#9c7428'), wx(300), 1.6, wz(297));
+  box(4.4, .25, 52.8, M('#e3b04b', { metalness: .55, roughness: .35 }), wx(300), 3.3, wz(297));
+  // fornuizen
+  for (let k = 0; k < 4; k++) {
+    const g = new THREE.Group(); g.position.set(wx(58), 0, wz(stoveY(k))); scene.add(g);
+    const real = new THREE.Group(); g.add(real);
+    box(8, 3.2, 7.6, M('#2b302e', { metalness: .4, roughness: .5 }), 0, 1.6, 0, real);
+    box(8.2, .14, 7.8, M('#3b413f', { metalness: .5, roughness: .4 }), 0, 3.27, 0, real);
+    box(.3, .3, 7, M('#8a918d', { metalness: .6 }), 4.2, 2.6, 0, real);
+    const burnMat = M('#151817', { emissive: '#000000' });
+    for (const [bx, bz] of [[-2, -1.8], [2, -1.8], [-2, 1.8], [2, 1.8]]) cyl(1, 1, .15, burnMat, bx, 3.4, bz, real);
+    const pan = cyl(1.7, 1.4, .55, M('#4a4f4d', { metalness: .6, roughness: .35 }), 0, 3.75, 0, real);
+    const food = sprite(real, true, 5); food.position.set(0, 5, 0);
+    const bar = sprite(real); bar.position.set(0, 7, 0);
+    const ghost = new THREE.Group(); g.add(ghost);
+    ghost.add(new THREE.Mesh(new THREE.BoxGeometry(8, 3.2, 7.6), new THREE.MeshBasicMaterial({ color: '#1a2722', transparent: true, opacity: .12 })));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(8, 3.2, 7.6)), new THREE.LineBasicMaterial({ color: '#1a2722', transparent: true, opacity: .45 }));
+    ghost.add(edges); ghost.position.y = 1.6;
+    stovesG.push({ real, ghost, burnMat, pan, food, bar });
+  }
+  // tafels
+  const chairMat = M('#5a3b26'), legMat = M('#3b2a1f'), linen = M('#efe6d2', { roughness: .95 });
+  const plateMat = M('#ffffff', { roughness: .4 }), crumbMat = M('#8b6a43');
+  TABLE_POS.forEach(([x, y], i) => {
+    const g = new THREE.Group(); g.position.set(wx(x), 0, wz(y)); scene.add(g);
+    const real = new THREE.Group(); g.add(real);
+    cyl(.35, .6, 2.5, legMat, 0, 1.25, 0, real);
+    cyl(3, 3, .3, linen, 0, 2.6, 0, real, 36);
+    for (const [sx, sz] of SEATS) {
+      const ox = sx / 10, oz = sz / 10;
+      box(1.9, .3, 1.9, chairMat, ox, 1.3, oz, real);
+      box(.25, 1.3, .25, chairMat, ox, .65, oz, real);
+      const back = box(sx ? .3 : 1.9, 2, sx ? 1.9 : .3, chairMat, ox + Math.sign(ox) * 1, 2.3, oz + Math.sign(oz) * 1, real);
+      back.castShadow = true;
+    }
+    const ghost = new THREE.Mesh(new THREE.RingGeometry(2.8, 3.15, 40), new THREE.MeshBasicMaterial({ color: '#f1ecdc', transparent: true, opacity: .2, side: THREE.DoubleSide }));
+    ghost.rotation.x = -Math.PI / 2; ghost.position.y = .05; g.add(ghost);
+    const dirty = new THREE.Group(); real.add(dirty);
+    cyl(1.3, 1.1, .15, plateMat, .6, 2.85, -.4, dirty, 24);
+    cyl(1.1, .9, .15, plateMat, -1, 2.85, .8, dirty, 24);
+    for (let c = 0; c < 10; c++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(.16, 6, 4), crumbMat);
+      m.position.set(Math.sin(c * 2.3 + i) * 2, 2.8, Math.cos(c * 1.7 + i) * 1.8); dirty.add(m);
+    }
+    const food = sprite(real, true, 5); food.position.set(0, 3.6, 0);
+    const bubble = sprite(g, false, 20); bubble.position.set(0, 9, 0);
+    const bar = sprite(g, false, 19); bar.position.set(0, 7, 0);
+    const hit = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 4.5, 12), hitMat);
+    hit.position.y = 2.2; hit.userData = { kind: 'table', i }; g.add(hit);
+    tablesG.push({ real, ghost, dirty, food, bubble, bar, hit });
+  });
 }
 const SEATS = [[0, -44], [0, 44], [-44, 0], [44, 0]];
-function draw(now) {
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  // keukenvloer
-  for (let y = 0; y < H; y += 35) for (let x = 0; x < 280; x += 35) { ctx.fillStyle = ((x + y) / 35) % 2 ? '#c9cec2' : '#e3e6dc'; ctx.fillRect(x, y, 35, 35); }
-  // houten vloer
-  for (let y = 0, i = 0; y < H; y += 28, i++) {
-    ctx.fillStyle = i % 2 ? '#7a5336' : '#704b30'; ctx.fillRect(320, y, 580, 28);
-    ctx.fillStyle = 'rgba(0,0,0,.18)'; const off = (i * 97) % 160; for (let x = 320 + off; x < W; x += 160) ctx.fillRect(x, y, 2, 28);
+
+/* bewegende figuren */
+const dyn = new THREE.Group(); scene.add(dyn);
+const geo = {
+  body: new THREE.CylinderGeometry(.68, .85, 1.6, 14), head: new THREE.SphereGeometry(.62, 16, 12), eye: new THREE.SphereGeometry(.09, 6, 4),
+  wBody: new THREE.CylinderGeometry(.85, 1.05, 2.2, 16), wHead: new THREE.SphereGeometry(.72, 16, 12),
+  toque: new THREE.CylinderGeometry(.55, .5, 1, 16), puff: new THREE.SphereGeometry(.72, 14, 10), bow: new THREE.BoxGeometry(.9, .32, .2),
+  plate: new THREE.CylinderGeometry(1.5, 1.25, .18, 24), ring: new THREE.TorusGeometry(1.75, .17, 8, 36), hit: new THREE.SphereGeometry(2.4, 8, 6),
+};
+const moodMats = { '#74c66f': M('#74c66f'), '#e3b04b': M('#e3b04b'), '#ec5a40': M('#ec5a40') };
+const SKINS = ['#f2c9a0', '#d9a273', '#a8704a', '#6e4a32', '#f5d6b8', '#c68b5e'].map(c => M(c, { roughness: .6 }));
+const eyeMat = M('#141414'), cookMat = M('#fbf8ef'), waiterMat = M('#1d2b26'), brassMat = M('#e3b04b', { metalness: .5, roughness: .4 });
+function person(parent, bodyGeo, bodyMat, headGeo, skin, headY) {
+  const g = new THREE.Group(); parent.add(g);
+  const body = new THREE.Mesh(bodyGeo, bodyMat); body.castShadow = true; g.add(body);
+  const head = new THREE.Mesh(headGeo, skin); head.castShadow = true; head.position.y = headY; g.add(head);
+  for (const s of [-1, 1]) { const e = new THREE.Mesh(geo.eye, eyeMat); e.position.set(s * .22, headY + .1, headGeo.parameters.radius * .92); g.add(e); }
+  return { g, body };
+}
+const partyMap = new Map(), workerMap = new Map(), dishMap = new Map(), floatMap = new Map();
+function syncMap(map, items, create, upd) {
+  const seen = new Set();
+  for (const it of items) { seen.add(it); let o = map.get(it); if (!o) { o = create(it); map.set(it, o); } upd(o, it); }
+  for (const [k, o] of map) if (!seen.has(k)) { dyn.remove(o.root); map.delete(k); }
+}
+function createParty(p) {
+  const root = new THREE.Group(); dyn.add(root);
+  const guests = [];
+  for (let g = 0; g < p.size; g++) guests.push(person(root, geo.body, moodMats['#74c66f'], geo.head, pick(SKINS), 1.25));
+  return { root, guests, px: p.x, py: p.y };
+}
+function updateParty(o, p, now) {
+  const seated = p.table && ['menu', 'order', 'wait', 'eat'].includes(p.state);
+  const mat = moodMats[moodColor(p.mood)];
+  const dx = p.x - o.px, dy = p.y - o.py, moving = Math.hypot(dx, dy) > .05;
+  const heading = moving ? Math.atan2(dx, dy) : o.heading || -Math.PI / 2;
+  o.heading = heading; o.px = p.x; o.py = p.y;
+  o.guests.forEach((gu, g) => {
+    gu.body.material = mat;
+    if (seated) {
+      const [sx, sz] = SEATS[g];
+      gu.g.position.set(wx(p.table.x) + sx / 10, 2.25, wz(p.table.y) + sz / 10);
+      gu.g.rotation.y = Math.atan2(-sx, -sz);
+    } else {
+      const bob = moving ? Math.abs(Math.sin(now / 110 + g)) * .3 : 0;
+      gu.g.position.set(wx(p.x) + (g % 2) * 1.5 - .75, .8 + bob, wz(p.y) + Math.floor(g / 2) * 1.5 - .75);
+      gu.g.rotation.y = heading;
+    }
+  });
+}
+function createWorker(w) {
+  const root = new THREE.Group(); dyn.add(root);
+  const kok = w.st.role === 'kok';
+  const pr = person(root, geo.wBody, kok ? cookMat : waiterMat, geo.wHead, SKINS[w.st.id % SKINS.length], 1.85);
+  pr.body.position.y = 1.1; pr.g.children.slice(1).forEach(c => c.position.y += 1.1);
+  if (kok) {
+    const t = new THREE.Mesh(geo.toque, cookMat); t.position.y = 3.95; t.castShadow = true; root.add(t);
+    const p = new THREE.Mesh(geo.puff, cookMat); p.position.y = 4.55; p.scale.y = .7; p.castShadow = true; root.add(p);
+  } else {
+    const b = new THREE.Mesh(geo.bow, brassMat); b.position.set(0, 2.05, .9); root.add(b);
   }
-  ctx.fillStyle = '#1a2722'; ctx.fillRect(0, 0, W, 34);
-  label('KEUKEN', 18, 18, 16, '#e3b04b', 'left'); label('RESTAURANT', 340, 18, 16, '#e3b04b', 'left');
-  label(D.phase === 'open' ? (D.t >= OPEN_T ? 'KEUKEN SLUIT' : 'OPEN') : 'GESLOTEN', W - 16, 18, 14, D.phase === 'open' && D.t < OPEN_T ? '#74c66f' : '#ec5a40', 'right');
-  // uitgifte
-  ctx.fillStyle = '#9c7428'; ctx.fillRect(280, 34, 40, H - 34);
-  ctx.fillStyle = '#e3b04b'; ctx.fillRect(280, 34, 40, 4);
-  ctx.save(); ctx.translate(300, H - 40); ctx.rotate(-Math.PI / 2); label('UITGIFTE', 0, 0, 11, '#2a1e05'); ctx.restore();
-  // deur
-  ctx.fillStyle = '#3b2a1f'; rr(842, 512, 58, 40, 6); ctx.fill(); label('INGANG', 871, 544, 10, '#e3b04b');
+  const name = sprite(root, false, 15); name.position.y = kok ? 6 : 4.9;
+  const carry = sprite(root, true, 6); carry.position.set(0, 3.9, 1.3);
+  const prog = sprite(root, false, 16); prog.position.y = kok ? 7 : 5.9;
+  return { root, name, carry, prog, px: w.x, py: w.y };
+}
+function updateWorker(o, w, now) {
+  const dx = w.x - o.px, dy = w.y - o.py, moving = Math.hypot(dx, dy) > .05;
+  if (moving) o.root.rotation.y = Math.atan2(dx, dy);
+  o.px = w.x; o.py = w.y;
+  o.root.position.set(wx(w.x), moving ? Math.abs(Math.sin(now / 100)) * .3 : 0, wz(w.y));
+  textTex(o.name, w.st.naam, '#f1ecdc', 1.5, 40);
+  const carried = w.carry ? w.carry.tk.item.dish.emoji : w.task && w.task.type === 'carry' ? w.task.tk.item.dish.emoji : null;
+  o.carry.visible = !!carried;
+  if (carried) emojiTex(o.carry, carried, 2);
+  const T = w.task, showProg = T && (T.type === 'order' || T.type === 'clean') && T.t > 0;
+  o.prog.visible = !!showProg;
+  if (showProg) barTex(o.prog, T.t / ((T.type === 'order' ? 1.5 : 2) / (.6 + .2 * w.st.a)), '#e3b04b', .5);
+}
+function createDish(d) {
+  const root = new THREE.Group(); dyn.add(root);
+  const plate = new THREE.Mesh(geo.plate, M('#fbf8ef', { roughness: .4 })); plate.castShadow = true; root.add(plate);
+  const ring = new THREE.Mesh(geo.ring, new THREE.MeshBasicMaterial({ color: '#ec5a40' })); ring.rotation.x = Math.PI / 2; ring.position.y = .12; root.add(ring);
+  const food = sprite(root, true, 5); food.position.y = 1.3;
+  const steam = [0, 1, 2].map(() => { const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: steamTex, transparent: true, depthWrite: false })); s.scale.set(1.1, 1.1, 1); root.add(s); return s; });
+  const hit = new THREE.Mesh(geo.hit, hitMat); hit.userData = { kind: 'dish', dish: d }; root.add(hit);
+  return { root, ring, food, steam, hit };
+}
+function updateDish(o, d, i, n, now) {
+  d.x = 300; d.y += (passTargetY(i, n) - d.y) * .2;
+  o.root.position.set(wx(300), 3.45, wz(d.y));
+  const warm = d.tk.item.dish.warm;
+  o.ring.material.color.set(warm ? tempColor(d.temp) : '#74c66f');
+  emojiTex(o.food, d.tk.item.dish.emoji, 2.8);
+  o.steam.forEach((s, j) => {
+    const ph = (now / 1100 + j / 3) % 1;
+    s.position.set(Math.sin(now / 300 + j * 2) * .5, 1.8 + ph * 2.6, 0);
+    s.material.opacity = warm ? clamp((d.temp - 55) / 45, 0, 1) * (1 - ph) * .85 : 0;
+  });
+}
+function tempColor(t) { const k = clamp((t - 35) / 55, 0, 1); const a = [124, 195, 232], b = [236, 90, 64]; return `rgb(${a.map((v, i) => Math.round(v + (b[i] - v) * k)).join(',')})`; }
+
+function render3d(now) {
+  const status = D.phase === 'open' ? (D.t >= OPEN_T ? ['KEUKEN SLUIT', '#ec5a40'] : ['OPEN', '#74c66f']) : ['GESLOTEN', '#ec5a40'];
+  textTex(openSign, status[0], status[1], 1.8);
   // fornuizen
   const cooking = {};
   D.workers.forEach(w => { if (w.task && w.task.type === 'cook') cooking[w.task.stove] = w.task; });
-  for (let k = 0; k < 4; k++) {
-    const y = stoveY(k);
-    if (k < S.stoves) {
-      ctx.fillStyle = '#2b302e'; rr(18, y - 38, 80, 76, 8); ctx.fill();
-      const T = cooking[k];
-      for (const [bx, by] of [[38, -18], [78, -18], [38, 18], [78, 18]]) {
-        ctx.beginPath(); ctx.arc(bx, y + by, 11, 0, 7); ctx.fillStyle = T ? `rgba(255,${110 + Math.sin(now / 90 + bx) * 30},40,.9)` : '#151817'; ctx.fill();
-        ctx.strokeStyle = '#555c58'; ctx.lineWidth = 2; ctx.stroke();
-      }
-      if (T) {
-        ctx.fillStyle = '#4a4f4d'; ctx.beginPath(); ctx.arc(58, y, 18, 0, 7); ctx.fill();
-        emoji(T.tk.item.dish.emoji, 58, y, 20);
-        ctx.fillStyle = '#1a2722'; ctx.fillRect(18, y - 50, 80, 7);
-        ctx.fillStyle = '#e3b04b'; ctx.fillRect(18, y - 50, 80 * clamp(T.t / T.dur, 0, 1), 7);
-      }
-    } else {
-      ctx.setLineDash([6, 5]); ctx.strokeStyle = 'rgba(26,39,34,.45)'; ctx.lineWidth = 2; rr(18, y - 38, 80, 76, 8); ctx.stroke(); ctx.setLineDash([]);
-      label('fornuis', 58, y, 12, 'rgba(26,39,34,.55)');
-    }
-  }
+  stovesG.forEach((o, k) => {
+    o.real.visible = k < S.stoves; o.ghost.visible = k >= S.stoves;
+    const T = cooking[k];
+    if (T) o.burnMat.emissive.setRGB(1, .32 + .1 * Math.sin(now / 90 + k), .08); else o.burnMat.emissive.setRGB(0, 0, 0);
+    o.pan.visible = o.food.visible = o.bar.visible = !!T;
+    if (T) { emojiTex(o.food, T.tk.item.dish.emoji, 2.6); barTex(o.bar, T.t / T.dur, '#e3b04b', .6); }
+  });
   // tafels
-  for (let i = 0; i < 8; i++) {
-    const [x, y] = TABLE_POS[i];
-    const t = D.tables[i];
-    if (i >= S.tables || !t) {
-      ctx.setLineDash([6, 6]); ctx.strokeStyle = 'rgba(241,236,220,.18)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x, y, 30, 0, 7); ctx.stroke(); ctx.setLineDash([]);
-      continue;
-    }
-    ctx.fillStyle = '#4b3121';
-    for (const [sx, sy] of SEATS) { rr(x + sx - 9, y + sy - 9, 18, 18, 5); ctx.fill(); }
-    ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.arc(x + 3, y + 4, 31, 0, 7); ctx.fill();
-    ctx.fillStyle = '#efe6d2'; ctx.beginPath(); ctx.arc(x, y, 30, 0, 7); ctx.fill();
-    ctx.strokeStyle = '#c9b994'; ctx.lineWidth = 2; ctx.stroke();
-    label(String(i + 1), x + 22, y + 22, 11, '#8b7a55');
-    if (t.dirty) {
-      ctx.fillStyle = '#8b6a43';
-      for (let c = 0; c < 9; c++) { ctx.beginPath(); ctx.arc(x + Math.sin(c * 2.3 + i) * 18, y + Math.cos(c * 1.7 + i) * 16, 2, 0, 7); ctx.fill(); }
-      emoji('🍽️', x, y, 22);
-      bubble(x, y - 64, '🧽', true, now);
-    }
+  tablesG.forEach((o, i) => {
+    const t = D.tables[i], real = i < S.tables && !!t;
+    o.real.visible = real; o.ghost.visible = !real;
+    o.bubble.visible = o.bar.visible = o.food.visible = false;
+    if (!real) return;
+    o.dirty.visible = t.dirty;
+    let bub = null, urgent = false;
+    if (t.dirty) { bub = ['🧽']; urgent = true; }
     const p = t.party;
     if (p && p.state !== 'walk') {
-      for (let g = 0; g < p.size; g++) guest(x + SEATS[g][0], y + SEATS[g][1], p.mood);
-      if (p.state === 'eat') p.items.forEach((it, j) => emoji(it.dish.emoji, x + (j - (p.items.length - 1) / 2) * 16, y, 16));
-      if (p.state === 'menu') bubble(x, y - 66, '📖', false, now);
-      if (p.state === 'order') bubble(x, y - 66, '📋', true, now);
-      if (p.state === 'eat') bubble(x, y - 66, '😋', false, now);
-      if (p.state === 'wait') {
-        const w = p.items.length * 22 + 12;
-        ctx.fillStyle = '#f1ecdc'; rr(x - w / 2, y - 80, w, 28, 8); ctx.fill();
-        p.items.forEach((it, j) => emoji(it.dish.emoji, x - w / 2 + 17 + j * 22, y - 66, 17, it.served ? 1 : .35));
+      if (p.state === 'menu') bub = ['📖'];
+      else if (p.state === 'order') { bub = ['📋']; urgent = true; }
+      else if (p.state === 'eat') bub = ['😋'];
+      else if (p.state === 'wait') bub = p.items.map(it => (it.served ? '' : '~') + it.dish.emoji);
+      o.bar.visible = true;
+      barTex(o.bar, p.mood / 100, moodColor(p.mood), .7);
+      if (p.state === 'eat' || (p.state === 'wait' && p.items.some(it => it.served))) {
+        o.food.visible = true;
+        const served = p.items.filter(it => it.served).map(it => it.dish.emoji).join('');
+        setTex(o.food, 'f:' + served, 64 * [...served].length / 2 + 32, 72, g => {
+          g.font = `52px ${EMOJI}`; g.textBaseline = 'middle'; g.fillText(served, 8, 40);
+        }, 1.6);
       }
-      ctx.fillStyle = 'rgba(0,0,0,.45)'; rr(x - 28, y + 58, 56, 6, 3); ctx.fill();
-      ctx.fillStyle = moodColor(p.mood); rr(x - 28, y + 58, 56 * clamp(p.mood, 0, 100) / 100, 6, 3); ctx.fill();
     }
-  }
-  // lopende gasten en wachtrij
-  for (const p of D.parties) {
-    if (!['door', 'walk', 'leave'].includes(p.state)) continue;
-    for (let g = 0; g < p.size; g++) guest(p.x + (g % 2) * 14 - 7, p.y + Math.floor(g / 2) * 14 - 7, p.mood);
-  }
-  // gerechten op de uitgifte
-  D.pass.forEach((d, i) => {
-    const ty = passTargetY(i, D.pass.length); d.y += (ty - d.y) * .2; d.x = 300;
-    const warm = d.tk.item.dish.warm;
-    ctx.beginPath(); ctx.arc(d.x, d.y, 19, 0, 7); ctx.fillStyle = '#f1ecdc'; ctx.fill();
-    ctx.lineWidth = 4; ctx.strokeStyle = warm ? tempColor(d.temp) : '#74c66f';
-    ctx.beginPath(); ctx.arc(d.x, d.y, 19, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (warm ? clamp((d.temp - 15) / 85, .05, 1) : 1)); ctx.stroke();
-    emoji(d.tk.item.dish.emoji, d.x, d.y + 1, 20);
-    if (warm && d.temp > 60) {
-      ctx.strokeStyle = `rgba(255,255,255,${(d.temp - 60) / 60})`; ctx.lineWidth = 1.5;
-      for (let s = -1; s <= 1; s += 2) { ctx.beginPath(); for (let k = 0; k < 10; k++) { const yy = d.y - 22 - k * 1.6, xx = d.x + s * 6 + Math.sin(now / 160 + k * .7 + s) * 2.5; k ? ctx.lineTo(xx, yy) : ctx.moveTo(xx, yy); } ctx.stroke(); }
+    if (bub) {
+      o.bubble.visible = true; bubbleTex(o.bubble, bub, urgent);
+      o.bubble.position.y = 9 + (urgent ? .25 * Math.sin(now / 140) : 0);
     }
   });
-  // personeel
-  for (const w of D.workers) {
-    const kok = w.st.role === 'kok';
-    ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.ellipse(w.x, w.y + 12, 12, 4, 0, 0, 7); ctx.fill();
-    ctx.beginPath(); ctx.arc(w.x, w.y, 13, 0, 7); ctx.fillStyle = kok ? '#fbf8ef' : '#1d2b26'; ctx.fill();
-    ctx.lineWidth = 2; ctx.strokeStyle = kok ? '#9aa39c' : '#e3b04b'; ctx.stroke();
-    if (kok) { ctx.fillStyle = '#ffffff'; rr(w.x - 8, w.y - 26, 16, 14, 5); ctx.fill(); ctx.strokeStyle = '#c4cbc5'; ctx.lineWidth = 1; ctx.stroke(); }
-    else { ctx.fillStyle = '#e3b04b'; ctx.beginPath(); ctx.moveTo(w.x - 6, w.y + 4); ctx.lineTo(w.x, w.y + 7); ctx.lineTo(w.x - 6, w.y + 10); ctx.moveTo(w.x + 6, w.y + 4); ctx.lineTo(w.x, w.y + 7); ctx.lineTo(w.x + 6, w.y + 10); ctx.fill(); }
-    ctx.fillStyle = kok ? '#1a2722' : '#f1ecdc'; ctx.beginPath(); ctx.arc(w.x - 4, w.y - 3, 1.5, 0, 7); ctx.arc(w.x + 4, w.y - 3, 1.5, 0, 7); ctx.fill();
-    const nameCol = w.x < 280 ? '#1a2722' : '#f1ecdc';
-    ctx.font = '600 10px "Bricolage Grotesque",system-ui,sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = nameCol; ctx.fillText(w.st.naam, w.x, w.y + 24);
-    const carried = w.carry ? w.carry.tk.item.dish.emoji : w.task && w.task.type === 'carry' ? w.task.tk.item.dish.emoji : null;
-    if (carried) emoji(carried, w.x + 14, w.y - 14, 17);
-    if (w.task && (w.task.type === 'order' || w.task.type === 'clean') && w.task.t > 0) {
-      const dur = (w.task.type === 'order' ? 1.5 : 2) / (.6 + .2 * w.st.a);
-      ctx.strokeStyle = '#e3b04b'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(w.x, w.y, 17, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(w.task.t / dur, 0, 1)); ctx.stroke();
-    }
-  }
-  // zwevende teksten
-  for (const f of D.floaters) {
-    ctx.globalAlpha = clamp(f.life, 0, 1);
-    ctx.font = `15px ${DISPLAY}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(10,16,13,.85)'; ctx.strokeText(f.text, f.x, f.y);
-    ctx.fillStyle = f.color; ctx.fillText(f.text, f.x, f.y);
-    ctx.globalAlpha = 1;
-  }
+  syncMap(partyMap, D.parties, createParty, (o, p) => updateParty(o, p, now));
+  syncMap(workerMap, D.workers, createWorker, (o, w) => updateWorker(o, w, now));
+  const n = D.pass.length;
+  syncMap(dishMap, D.pass, createDish, (o, d) => updateDish(o, d, D.pass.indexOf(d), n, now));
+  syncMap(floatMap, D.floaters, f => { const root = sprite(dyn, false, 30); return { root }; }, (o, f) => {
+    textTex(o.root, f.text, f.color, 2.1);
+    o.root.position.set(wx(f.x), 8 + (1.6 - f.life) * 2.4, wz(f.y));
+    o.root.material.opacity = clamp(f.life, 0, 1);
+  });
+  placeCamera();
+  renderer.render(scene, camera);
 }
-function bubble(x, y, ch, urgent, now) {
-  ctx.fillStyle = '#f1ecdc'; ctx.beginPath(); ctx.arc(x, y, 15, 0, 7); ctx.fill();
-  ctx.beginPath(); ctx.moveTo(x - 5, y + 12); ctx.lineTo(x, y + 21); ctx.lineTo(x + 5, y + 12); ctx.fill();
-  if (urgent) { ctx.strokeStyle = `rgba(227,176,75,${.5 + .5 * Math.sin(now / 150)})`; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, y, 17, 0, 7); ctx.stroke(); }
-  emoji(ch, x, y + 1, 17);
-}
+
+/* camera draaien en klikken */
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let drag = null;
+cv.addEventListener('pointerdown', e => { drag = { id: e.pointerId, x: e.clientX, yaw: camYaw, moved: false }; });
+cv.addEventListener('pointermove', e => {
+  if (!drag || drag.id !== e.pointerId) return;
+  const dx = e.clientX - drag.x;
+  if (!drag.moved && Math.abs(dx) > 8) { drag.moved = true; try { cv.setPointerCapture(e.pointerId); } catch (err) {} }
+  if (drag.moved) camYaw = clamp(drag.yaw - dx * .006, -.8, .8);
+});
+cv.addEventListener('pointerup', e => {
+  if (!drag) return;
+  const moved = drag.moved; drag = null;
+  if (moved) return;
+  const r = cv.getBoundingClientRect();
+  ndc.set((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const targets = [...tablesG.filter((_, i) => i < S.tables).map(o => o.hit), ...[...dishMap.values()].map(o => o.hit)];
+  const hits = ray.intersectObjects(targets, false);
+  // gerechten gaan voor tafels als de klik op beide valt
+  const h = hits.find(h => h.object.userData.kind === 'dish') || hits[0];
+  if (h) managerAct(h.object.userData);
+});
+cv.addEventListener('pointercancel', () => { drag = null; });
+cv.addEventListener('wheel', e => { e.preventDefault(); camDist = clamp(camDist + e.deltaY * .04, 55, 120); }, { passive: false });
+cv.addEventListener('dblclick', () => { camYaw = 0; camDist = 84; });
+document.fonts && document.fonts.ready.then(() => {
+  texCache.forEach((t, k) => { if (k.startsWith('t:')) { t.dispose(); texCache.delete(k); } });
+  scene.traverse(o => { if (o.isSprite && o.userData.key && o.userData.key.startsWith('t:')) { o.userData.key = null; o.userData.make && o.userData.make(); } });
+});
+buildStatic();
 
 /* ---------- lus ---------- */
 function resize() {
-  const r = cv.getBoundingClientRect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+  const r = cv.getBoundingClientRect();
   if (!r.width) return;
-  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.width * H / W * dpr);
-  scale = cv.width / W;
+  renderer.setSize(r.width, r.width * H / W, false);
+  camera.aspect = W / H; camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(cv);
 let last = performance.now(), uiTimer = 0;
@@ -843,9 +1092,9 @@ function frame(now) {
     const steps = speed; for (let i = 0; i < steps; i++) update(dt);
     D.mgrCd = Math.max(0, D.mgrCd - dt);
   }
-  D.floaters.forEach(f => { f.life -= dt; f.y -= 22 * dt; });
+  D.floaters.forEach(f => { f.life -= dt; });
   D.floaters = D.floaters.filter(f => f.life > 0);
-  draw(now);
+  render3d(now);
   renderTop();
   uiTimer -= dt; if (uiTimer <= 0) { uiTimer = .35; renderAll(); }
   requestAnimationFrame(frame);
