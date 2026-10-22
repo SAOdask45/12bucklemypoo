@@ -558,7 +558,7 @@ function freshChip(age) {
 function staffRow(x, cand) {
   const kok = x.role === 'kok', prep = D.phase === 'prep';
   return `<div class="row">
-    <div class="line"><div><span class="role ${x.role}">${kok ? 'Kok' : 'Ober'}</span><b>${x.naam}</b></div><span class="num">${euro(x.loon)} per dag</span></div>
+    <div class="line"><div><span class="role ${x.role}">${kok ? 'Kok' : 'Ober'}</span><b>${x.naam}</b> <span class="note">de ${speciesOf(x).naam}</span></div><span class="num">${euro(x.loon)} per dag</span></div>
     <div class="attrs"><span>Snelheid ${pips(x.a)}</span><span>${kok ? 'Kookkunst' : 'Charme'} ${pips(x.b)}</span></div>
     <div class="line">${cand
       ? `<span class="note">${kok ? 'Snelle koks koken sneller, goede koks maken lekkerder eten.' : 'Snelle obers lopen sneller, charmante obers krijgen meer fooi.'}</span><button type="button" class="btn" data-act="hire" data-id="${x.id}">Aannemen</button>`
@@ -912,13 +912,12 @@ const SEATS = [[0, -44], [0, 44], [-44, 0], [44, 0]];
 const dyn = new THREE.Group(); scene.add(dyn);
 const geo = {
   body: new THREE.CylinderGeometry(.68, .85, 1.6, 14), head: new THREE.SphereGeometry(.62, 16, 12), eye: new THREE.SphereGeometry(.09, 6, 4),
-  wBody: new THREE.CylinderGeometry(.85, 1.05, 2.2, 16), wHead: new THREE.SphereGeometry(.72, 16, 12),
   toque: new THREE.CylinderGeometry(.55, .5, 1, 16), puff: new THREE.SphereGeometry(.72, 14, 10), bow: new THREE.BoxGeometry(.9, .32, .2),
   plate: new THREE.CylinderGeometry(1.5, 1.25, .18, 24), ring: new THREE.TorusGeometry(1.75, .17, 8, 36), hit: new THREE.SphereGeometry(2.4, 8, 6),
 };
 const moodMats = { '#74c66f': M('#74c66f'), '#e3b04b': M('#e3b04b'), '#ec5a40': M('#ec5a40') };
 const SKINS = ['#f2c9a0', '#d9a273', '#a8704a', '#6e4a32', '#f5d6b8', '#c68b5e'].map(c => M(c, { roughness: .6 }));
-const eyeMat = M('#141414'), cookMat = M('#fbf8ef'), waiterMat = M('#1d2b26'), brassMat = M('#e3b04b', { metalness: .5, roughness: .4 });
+const eyeMat = M('#141414'), cookMat = M('#fbf8ef'), brassMat = M('#e3b04b', { metalness: .5, roughness: .4 });
 function person(parent, bodyGeo, bodyMat, headGeo, skin, headY) {
   const g = new THREE.Group(); parent.add(g);
   const body = new THREE.Mesh(bodyGeo, bodyMat); body.castShadow = true; g.add(body);
@@ -958,20 +957,81 @@ function updateParty(o, p, now) {
     }
   });
 }
+// personeel als tekenfilmfiguren: eenvoudige vormen, felle vlakke kleuren en grote ogen met kleine pupillen
+const eyeWhite = M('#ffffff'), pupilMat = M('#111111'), mouthMat = M('#2a1410');
+function sph(r, mat, x, y, z, parent) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 20, 14), mat); m.position.set(x, y, z); parent.add(m); return m; }
+function toonEyes(g, y, z, r, gap) {
+  for (const s of [-1, 1]) {
+    sph(r, eyeWhite, s * gap, y, z, g);
+    sph(r * .36, pupilMat, s * (gap + r * .1), y - r * .08, z + r * .84, g);
+  }
+}
+function smile(g, y, z, w) {
+  const m = new THREE.Mesh(new THREE.TorusGeometry(w, .055, 6, 14, Math.PI), mouthMat);
+  m.position.set(0, y, z); m.rotation.z = Math.PI; g.add(m);
+}
+const SPECIES = [
+  { naam: 'kat', build(g) {
+    const c = M('#5aa9e6');
+    cyl(.75, .9, 1.8, c, 0, .9, 0, g); sph(.95, c, 0, 2.65, 0, g);
+    for (const s of [-1, 1]) { const e = cyl(0, .32, .7, c, s * .55, 3.45, 0, g); e.rotation.z = -s * .35; box(.9, .04, .04, mouthMat, s * .75, 2.45, .78, g).rotation.z = s * .12; }
+    const tail = cyl(.12, .12, 1.5, c, 0, 1.3, -.95, g); tail.rotation.x = -.6;
+    toonEyes(g, 2.82, .66, .42, .36); smile(g, 2.35, .88, .18);
+    return { top: 3.55, neck: 1.85, front: .82 };
+  } },
+  { naam: 'vis', build(g) {
+    const c = M('#f39c3c'), leg = M('#d9772a');
+    for (const s of [-1, 1]) { cyl(.13, .13, 1.3, leg, s * .35, .65, 0, g); box(.35, .14, .55, leg, s * .35, .07, .15, g); }
+    const b = sph(1.15, c, 0, 2.2, 0, g); b.scale.set(1, 1.1, .95);
+    for (const s of [-1, 1]) { const f = cyl(0, .3, .7, c, s * 1.2, 2, 0, g); f.rotation.z = s * 1.9; }
+    toonEyes(g, 2.62, .8, .5, .42); smile(g, 1.95, 1.05, .25);
+    return { top: 3.4, neck: 1.5, front: 1 };
+  } },
+  { naam: 'konijn', build(g) {
+    const c = M('#f4a6c6'), inner = M('#fbd3e4');
+    cyl(.6, .75, 1.6, c, 0, .8, 0, g); sph(.85, c, 0, 2.35, 0, g);
+    for (const s of [-1, 1]) {
+      const e = cyl(.18, .22, 1.5, c, s * .7, 3.5, 0, g); e.rotation.z = -s * .55;
+      const i = box(.16, 1.1, .05, inner, s * .72, 3.5, .2, g); i.rotation.z = -s * .55;
+    }
+    toonEyes(g, 2.52, .56, .38, .32); smile(g, 2.1, .78, .14);
+    return { top: 3.15, neck: 1.6, front: .66 };
+  } },
+  { naam: 'banaan', build(g) {
+    const c = M('#f7d64a');
+    const b = cyl(.7, .75, 2.6, c, 0, 1.5, 0, g); b.rotation.z = .08;
+    sph(.7, c, .1, 2.8, 0, g);
+    cyl(.1, .18, .45, M('#5a3d1e'), .14, 3.6, 0, g);
+    cyl(.3, .2, .25, M('#5a3d1e'), 0, .12, 0, g);
+    toonEyes(g, 2.6, .58, .42, .36); smile(g, 2.1, .74, .2);
+    return { top: 3.4, neck: 1.8, front: .76 };
+  } },
+  { naam: 'beer', build(g) {
+    const c = M('#9a6a45'), light = M('#e3c39d');
+    cyl(.95, 1.1, 1.9, c, 0, .95, 0, g); sph(1, c, 0, 2.75, 0, g);
+    for (const s of [-1, 1]) sph(.35, c, s * .7, 3.5, 0, g);
+    sph(.45, light, 0, 2.48, .82, g); sph(.15, mouthMat, 0, 2.66, 1.24, g);
+    toonEyes(g, 3, .78, .34, .4);
+    return { top: 3.7, neck: 1.9, front: .98 };
+  } },
+];
+const speciesOf = st => SPECIES[(st.id - 1) % SPECIES.length];
 function createWorker(w) {
   const root = new THREE.Group(); dyn.add(root);
   const kok = w.st.role === 'kok';
-  const pr = person(root, geo.wBody, kok ? cookMat : waiterMat, geo.wHead, SKINS[w.st.id % SKINS.length], 1.85);
-  pr.body.position.y = 1.1; pr.g.children.slice(1).forEach(c => c.position.y += 1.1);
+  const f = speciesOf(w.st).build(root);
   if (kok) {
-    const t = new THREE.Mesh(geo.toque, cookMat); t.position.y = 3.95; t.castShadow = true; root.add(t);
-    const p = new THREE.Mesh(geo.puff, cookMat); p.position.y = 4.55; p.scale.y = .7; p.castShadow = true; root.add(p);
+    const t = new THREE.Mesh(geo.toque, cookMat); t.position.y = f.top + .45; root.add(t);
+    const p = new THREE.Mesh(geo.puff, cookMat); p.position.y = f.top + 1.05; p.scale.y = .7; root.add(p);
+    box(1.1, 1, .1, cookMat, 0, f.neck - .75, f.front, root);
   } else {
-    const b = new THREE.Mesh(geo.bow, brassMat); b.position.set(0, 2.05, .9); root.add(b);
+    for (const s of [-1, 1]) { const b = cyl(0, .26, .45, brassMat, s * .22, f.neck, f.front + .08, root); b.rotation.z = s * Math.PI / 2; }
+    sph(.12, brassMat, 0, f.neck, f.front + .12, root);
   }
-  const name = sprite(root, false, 15); name.position.y = kok ? 6 : 4.9;
-  const carry = sprite(root, true, 6); carry.position.set(0, 3.9, 1.3);
-  const prog = sprite(root, false, 16); prog.position.y = kok ? 7 : 5.9;
+  root.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  const name = sprite(root, false, 15); name.position.y = f.top + (kok ? 2.3 : 1.2);
+  const carry = sprite(root, true, 6); carry.position.set(0, f.top, 1.4);
+  const prog = sprite(root, false, 16); prog.position.y = name.position.y + .9;
   addOutlines(root);
   return { root, name, carry, prog, px: w.x, py: w.y };
 }
